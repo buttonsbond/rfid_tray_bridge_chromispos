@@ -16,35 +16,50 @@ p.s. the code was made with the assistance of AI. I couldn't get the first scrip
 
 As it stands as far as Chromis is concerned this could be used as either a loyalty card or gift card but not both since the gift cards uses a different prefix, if anyone can think of a way round that feel free to contribute.
 
-# 🚀 Installation & Usage (Windows)
-✅ Prerequisites
-Windows PC with a PC/SC-compatible NFC reader
-Python 3.8+ installed from python.org ☑️ During installation, check “Add Python to PATH”
-ChromePOS or any POS app that accepts keyboard/MagStripe-style input
-📥 1. Get the Repo
+## 🚀 Installation & Usage (Windows)
+
+### ✅ Prerequisites
+- Windows PC with a PC/SC-compatible NFC reader  
+- Python 3.8+ installed from [python.org](https://www.python.org/downloads/)  
+  ☑️ During installation, check **“Add Python to PATH”**  
+- Chromis POS (or any POS app that accepts keyboard/magstripe-style input)
+
+### 📥 1. Clone or Download
+
+```bash
 git clone https://github.com/buttonsbond/rfid_tray_bridge_chromispos.git
 cd rfid_tray_bridge_chromispos
-Or download and extract the ZIP.
+```
+(Or download the ZIP and extract it.)
 
-📦 2. Install Dependencies
+### 📦 2. Install Dependencies
+```bash
 pip install pyscard pyautogui pystray pillow
-▶️ 3. Run the Bridge
+```
+### ▶️ 3. Run the Bridge
 Tray mode (default):
+```bash
 python rfid_tray_bridge.py
-
+```
 Console mode (for debugging):
+```bash
 python rfid_tray_bridge.py --console
-(Logs UID, payload, and Track-2 length warnings.)
+```
+Console mode shows raw UIDs, the decimal payload sent to the POS, and warnings if the track data exceeds 37 digits (Track-2 limit).
 
-The script creates rfid_bridge.ini next to itself. By default, it’s configured for Chromis POS.
+The script creates rfid_bridge.ini next to itself. It’s preconfigured for Chromis POS.
 
-🔧 4. Configuration (rfid_bridge.ini)
-* prefix: pre-pends digits/letters before the UID. For Chromis, digits only (docs say “M1995” but it fails).
-* suffix: trailing char (Chromis default '?'); leave blank if not needed.
-* send_semicolon: include a ';' start sentinel (Chromis needs this off).
-* send_enter: press Enter after typing the card number (Chromis needs this on).
-* typing_interval: delay between keystrokes in seconds.
-* chromis_mode: when "yes," overrides the above for Chromis (no ';', Enter on).
+### 🔧 4. Configuration (rfid_bridge.ini)
+```bash
+# RFID POS Bridge configuration.
+# prefix: digits/letters added before the UID (magstripe PAN prefix, etc.).
+#   Note: Chromis documentation suggests “M1995”, but Chromis only accepts digits.
+#         The default below uses “1995” so cards are recognized.
+# suffix: trailing characters (default '?' for magstripe). Leave blank if not needed.
+# send_semicolon: set to "yes" to prepend ';' (Track-2 start). Chromis prefers "no".
+# send_enter: set to "yes" to press Enter after typing. Chromis requires this.
+# typing_interval: delay between keystrokes (seconds); increase if your POS needs slower typing.
+# chromis_mode: when "yes", overrides the above to match Chromis (no ';', send Enter).
 [POS]
 prefix = 1995
 suffix = ?
@@ -52,20 +67,25 @@ send_semicolon = no
 send_enter = yes
 typing_interval = 0.01
 chromis_mode = yes
-🧱 5. Optional: Build a Standalone EXE
+```
+Adjust these values if you’re targeting another POS.
+
+### 🧱 5. Build a Standalone EXE (Optional)
+```bash
 pip install pyinstaller
 pyinstaller --onefile --noconsole rfid_tray_bridge.py
-You’ll find the executable under dist\rfid_tray_bridge.exe. Run it from any writable folder (e.g. your user directory) so the INI file can sit beside it.
+```
+The executable will be in dist/rfid_tray_bridge.exe. Run it from a writable folder so it can create rfid_bridge.ini.
 
-⚙️ 6. Start with Windows (Optional)
+### ⚙️ 6. Start with Windows (Optional)
 Use the tray icon → Start with Windows to add/remove the app from your Startup folder. Works for both script and EXE versions.
 
-📜 Changelog
-v0.2 (latest)
-Chromis mode improvements: default prefix now 1995 (docs mention “M1995”, but Chromis only accepts digits).
-INI comments updated to explain this behavior for other POS users.
-Console mode enhanced to show the full payload and warn if the track exceeds 37 digits.
-Tray icon bug fix (typo in create_icon()).
-General stability improvements for both script and EXE workflow.
-v0.1
-First release: UID reader, decimal conversion, tray controls, autostart toggle, chromis-compatible output.
+## 📜 Changelog
+* v0.2 (latest)
+  * Default prefix is now numeric (1995) because Chromis ignores non-digit characters in Track-2.
+  * INI comments updated to document this Chromis behavior for other POS users.
+  * Console mode now logs the full payload and warns if the Track data exceeds 37 digits.
+  * Fixed a typo in create_icon() that caused a syntax error.
+  * Minor stability improvements for script and EXE usage.
+* v0.1
+  * Initial release: tray icon, autostart toggle, UID→decimal conversion, Chromis-friendly formatting, PyInstaller support.

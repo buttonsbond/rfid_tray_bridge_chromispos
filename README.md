@@ -4,15 +4,11 @@ A simple tray utility in python (executable made with pyinstaller) to read RFID 
 The executable was tested on a Windows 11 system.
 The ini file is not required as it will be created automatically - you can edit it to suit your own needs. The ini file just controls the prefix and suffix added to the payload and should be fairly self explanatory.
 
-By default the card will be prefixed with ;BB2295 followed by the UID of the scanned card then a ? (question mark).
-
 The program sits in the system tray and can be set to automatically start with windows.
 
 The software is free but if you want to buy me a beer, here's my paypal: https://www.paypal.com/paypalme/alltechplus
 
 ChromisPos is an excellent point of sale software available on sourceforge here: https://sourceforge.net/projects/chromispos/
-
-CHANGES: version 2 - updated so that hex in UIDs are converted into decimals which ChromisPos will accept
 
 :-)
 
@@ -20,63 +16,56 @@ p.s. the code was made with the assistance of AI. I couldn't get the first scrip
 
 As it stands as far as Chromis is concerned this could be used as either a loyalty card or gift card but not both since the gift cards uses a different prefix, if anyone can think of a way round that feel free to contribute.
 
-# 🛠️ Installation & Build Guide (Windows)
+# 🚀 Installation & Usage (Windows)
 ✅ Prerequisites
-Windows PC with USB NFC reader (PC/SC-compatible)
-Python 3.8+ installed from python.org
-✔️ During installation, select “Add Python to PATH”
-
-📥 1. Download the Source
-From the repository:
-https://github.com/buttonsbond/rfid_tray_bridge_chromispos
-
-Click Code → Download ZIP and extract it, or
-Clone it:
+Windows PC with a PC/SC-compatible NFC reader
+Python 3.8+ installed from python.org ☑️ During installation, check “Add Python to PATH”
+ChromePOS or any POS app that accepts keyboard/MagStripe-style input
+📥 1. Get the Repo
 git clone https://github.com/buttonsbond/rfid_tray_bridge_chromispos.git
 cd rfid_tray_bridge_chromispos
+Or download and extract the ZIP.
+
 📦 2. Install Dependencies
-In the project folder, open Command Prompt (Shift+Right Click → “Open PowerShell window here”) and run:
-
 pip install pyscard pyautogui pystray pillow
-▶️ 3. Run the Script (No EXE needed)
-To launch the tool with the tray icon:
-
+▶️ 3. Run the Bridge
+Tray mode (default):
 python rfid_tray_bridge.py
-A tray icon labeled “RFID POS Bridge” will appear.
-A config file rfid_bridge.ini will be created next to the script.
-The tool runs in the background and sends POS card data when an NFC card is scanned.
-💡 Use pythonw rfid_tray_bridge.py if you prefer no console window.
 
-🎛️ 4. Configure Card Output
-Edit the generated rfid_bridge.ini file (in the same folder):
+Console mode (for debugging):
+python rfid_tray_bridge.py --console
+(Logs UID, payload, and Track-2 length warnings.)
 
+The script creates rfid_bridge.ini next to itself. By default, it’s configured for Chromis POS.
+
+🔧 4. Configuration (rfid_bridge.ini)
+* prefix: pre-pends digits/letters before the UID. For Chromis, digits only (docs say “M1995” but it fails).
+* suffix: trailing char (Chromis default '?'); leave blank if not needed.
+* send_semicolon: include a ';' start sentinel (Chromis needs this off).
+* send_enter: press Enter after typing the card number (Chromis needs this on).
+* typing_interval: delay between keystrokes in seconds.
+* chromis_mode: when "yes," overrides the above for Chromis (no ';', Enter on).
 [POS]
-prefix = BB2295
+prefix = 1995
 suffix = ?
-send_semicolon = yes
-send_enter = no
+send_semicolon = no
+send_enter = yes
 typing_interval = 0.01
-Final output format: ;{prefix}{UID}{suffix}
-Example: ;BB2295045178721E6180?
-
-🧱 5. Optional: Build Your Own EXE
-If you want a standalone executable:
-
-Install PyInstaller:
-
+chromis_mode = yes
+🧱 5. Optional: Build a Standalone EXE
 pip install pyinstaller
-Build it:
-
 pyinstaller --onefile --noconsole rfid_tray_bridge.py
-The EXE will be in the dist folder. Move it anywhere (e.g., your user folder). It will still use a local rfid_bridge.ini file right next to the EXE.
+You’ll find the executable under dist\rfid_tray_bridge.exe. Run it from any writable folder (e.g. your user directory) so the INI file can sit beside it.
 
-⚙️ 6. Run at Windows Startup
-Right-click the tray icon → select “Start with Windows” (This adds/removes a shortcut in your Startup folder automatically.)
-Alternatively, you can create your own shortcut in shell:startup pointing to:
+⚙️ 6. Start with Windows (Optional)
+Use the tray icon → Start with Windows to add/remove the app from your Startup folder. Works for both script and EXE versions.
 
-pythonw.exe C:\Path\To\rfid_tray_bridge.py
-or the compiled EXE.
-
-🔧 Need to Modify Behavior?
-You can remap prefixes based on UIDs, add logging, or extend the script—all Python source is in the repo.
-The tray icon also lets you reload the INI, start/stop reading, or quit the app.
+📜 Changelog
+v0.2 (latest)
+Chromis mode improvements: default prefix now 1995 (docs mention “M1995”, but Chromis only accepts digits).
+INI comments updated to explain this behavior for other POS users.
+Console mode enhanced to show the full payload and warn if the track exceeds 37 digits.
+Tray icon bug fix (typo in create_icon()).
+General stability improvements for both script and EXE workflow.
+v0.1
+First release: UID reader, decimal conversion, tray controls, autostart toggle, chromis-compatible output.

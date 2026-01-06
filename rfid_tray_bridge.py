@@ -13,14 +13,11 @@ from smartcard.System import readers
 from smartcard.Exceptions import NoCardException
 
 APP_NAME = "RFID POS Bridge"
-pyautogui.FAILSAFE = False  # prevent exceptions when mouse hits screen corner
+pyautogui.FAILSAFE = False  # avoid accidental aborts
 
 
-# ---------------------------------------------------------------------------
-# Path helpers (keep config beside script/EXE)
-# ---------------------------------------------------------------------------
 def app_dir():
-    if getattr(sys, "frozen", False):  # PyInstaller EXE
+    if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
@@ -36,7 +33,7 @@ def ensure_config():
 
     config = configparser.ConfigParser()
     config["POS"] = {
-        "prefix": "BB2295",
+        "prefix": "M1995",
         "suffix": "?",
         "send_semicolon": "yes",
         "send_enter": "no",
@@ -63,9 +60,6 @@ def load_config():
     }
 
 
-# ---------------------------------------------------------------------------
-# Startup-folder helpers
-# ---------------------------------------------------------------------------
 def startup_dir():
     return Path(os.environ["APPDATA"]) / r"Microsoft\Windows\Start Menu\Programs\Startup"
 
@@ -104,9 +98,6 @@ def autostart_installed():
     return autostart_script_path().exists()
 
 
-# ---------------------------------------------------------------------------
-# Smartcard worker thread
-# ---------------------------------------------------------------------------
 class RFIDWorker(threading.Thread):
     def __init__(self, message_queue):
         super().__init__(daemon=True)
@@ -156,10 +147,11 @@ class RFIDWorker(threading.Thread):
                 if not conn:
                     break
 
-                uid = self.read_uid(conn)
-                self.message_queue.put(("info", f"Card UID: {uid}"))
+                uid_hex = self.read_uid(conn)
+                self.message_queue.put(("info", f"Card UID (hex): {uid_hex}"))
 
-                if uid != self.last_uid:
+                if uid_hex != self.last_uid:
+                    decimal_uid = str(int(uid_hex, 16))  # convert hex UID to decimal string
                     with self.cfg_lock:
                         cfg = self.config.copy()
 
@@ -167,7 +159,7 @@ class RFIDWorker(threading.Thread):
                     if cfg["send_semicolon"]:
                         pieces.append(";")
                     pieces.append(cfg["prefix"])
-                    pieces.append(uid)
+                    pieces.append(decimal_uid)
                     pieces.append(cfg["suffix"])
                     payload = "".join(pieces)
 
@@ -175,7 +167,7 @@ class RFIDWorker(threading.Thread):
                     if cfg["send_enter"]:
                         pyautogui.press("enter")
 
-                    self.last_uid = uid
+                    self.last_uid = uid_hex
                 else:
                     self.message_queue.put(("info", "Duplicate UID – skipped."))
 
@@ -190,9 +182,6 @@ class RFIDWorker(threading.Thread):
                 self.last_uid = None
 
 
-# ---------------------------------------------------------------------------
-# Tray application
-# ---------------------------------------------------------------------------
 def create_icon(size=64, color="blue"):
     img = Image.new("RGB", (size, size), "white")
     draw = ImageDraw.Draw(img)
@@ -259,7 +248,7 @@ def main():
         )
     )
 
-    start_scanning(icon)  # auto-start scanning
+    start_scanning(icon)
 
     def monitor_messages():
         while icon.visible:

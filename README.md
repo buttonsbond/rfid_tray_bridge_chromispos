@@ -12,13 +12,15 @@ The software is free but if you want to buy me a beer, here's my paypal: https:/
 
 ChromisPos is an excellent point of sale software available on sourceforge here: https://sourceforge.net/projects/chromispos/
 
+CHANGES: version 2 - updated so that hex in UIDs are converted into decimals which ChromisPos will accept
+
 :-)
 
 p.s. the code was made with the assistance of AI. I couldn't get the first scripts I tried to read data from the cards as I couldn't authenticate the data stored on the cards but could read the UID without authentication. My original idea was to program simple text on the cards. I think now I'll just program the cards with the business name and contact details so if anyone scans if they find the card, they can return it to the outlet and/or add the contact details to their phones.
 
 As it stands as far as Chromis is concerned this could be used as either a loyalty card or gift card but not both since the gift cards uses a different prefix, if anyone can think of a way round that feel free to contribute.
 
-🛠️ Installation & Build Guide (Windows)
+# 🛠️ Installation & Build Guide (Windows)
 ✅ Prerequisites
 Windows PC with USB NFC reader (PC/SC-compatible)
 Python 3.8+ installed from python.org

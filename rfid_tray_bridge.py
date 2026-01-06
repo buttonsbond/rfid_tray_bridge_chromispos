@@ -13,7 +13,7 @@ from smartcard.System import readers
 from smartcard.Exceptions import NoCardException
 
 APP_NAME = "RFID POS Bridge"
-pyautogui.FAILSAFE = False  # avoid accidental aborts
+pyautogui.FAILSAFE = False  # prevent accidental aborts when mouse hits the corner
 
 
 def app_dir():
@@ -23,26 +23,32 @@ def app_dir():
 
 
 CONFIG_PATH = app_dir() / "rfid_bridge.ini"
+DEFAULT_CONFIG = """\
+# RFID POS Bridge configuration.
+# prefix: digits/letters added before the UID (e.g., merchant ID or magstripe PAN prefix).
+#    Note: Chromis documentation suggests “M1995”, but Chromis only accepts digits;
+#          the default below uses “1995” so the card is recognized.
+# suffix: trailing characters (default '?' for magstripe sentinel). Leave blank if not needed.
+# send_semicolon: set to "yes" to prepend ';' (magstripe Track-2 start). Chromis prefers "no".
+# send_enter: set to "yes" to press Enter after the code. Chromis requires this.
+# typing_interval: delay between keystrokes (seconds). Increase if your POS needs slower typing.
+# chromis_mode: when "yes", overrides the above to match Chromis expectations (no ';', send Enter).
+[POS]
+prefix = 1995
+suffix = ?
+send_semicolon = no
+send_enter = yes
+typing_interval = 0.01
+chromis_mode = yes
+"""
 
 
 def ensure_config():
-    cfg_path = CONFIG_PATH
-    cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    if cfg_path.exists():
+    if CONFIG_PATH.exists():
         return
-
-    config = configparser.ConfigParser()
-    config["POS"] = {
-        "prefix": "M1995",
-        "suffix": "?",
-        "send_semicolon": "yes",
-        "send_enter": "no",
-        "typing_interval": "0.01"
-    }
-
-    with cfg_path.open("w", encoding="utf-8") as fh:
-        config.write(fh)
-    print(f"[INFO] Created default config at {cfg_path}")
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(DEFAULT_CONFIG, encoding="utf-8")
+    print(f"[INFO] Created default config at {CONFIG_PATH}")
 
 
 def load_config():
@@ -51,13 +57,20 @@ def load_config():
     config.read(CONFIG_PATH, encoding="utf-8")
 
     section = config["POS"]
-    return {
+    result = {
         "prefix": section.get("prefix", ""),
-        "suffix": section.get("suffix", "?"),
-        "send_semicolon": section.getboolean("send_semicolon", True),
-        "send_enter": section.getboolean("send_enter", False),
+        "suffix": section.get("suffix", ""),
+        "send_semicolon": section.getboolean("send_semicolon", False),
+        "send_enter": section.getboolean("send_enter", True),
         "typing_interval": section.getfloat("typing_interval", 0.01),
+        "chromis_mode": section.getboolean("chromis_mode", True),
     }
+
+    if result["chromis_mode"]:
+        result["send_semicolon"] = False
+        result["send_enter"] = True
+
+    return result
 
 
 def startup_dir():
@@ -151,7 +164,7 @@ class RFIDWorker(threading.Thread):
                 self.message_queue.put(("info", f"Card UID (hex): {uid_hex}"))
 
                 if uid_hex != self.last_uid:
-                    decimal_uid = str(int(uid_hex, 16))  # convert hex UID to decimal string
+                    decimal_uid = str(int(uid_hex, 16))
                     with self.cfg_lock:
                         cfg = self.config.copy()
 
@@ -163,9 +176,18 @@ class RFIDWorker(threading.Thread):
                     pieces.append(cfg["suffix"])
                     payload = "".join(pieces)
 
-                    pyautogui.write(payload, interval=cfg["typing_interval"])
-                    if cfg["send_enter"]:
-                        pyautogui.press("enter")
+                    track_digits = len(cfg["prefix"]) + len(decimal_uid)
+                    self.message_queue.put(("info", f"Sending: {payload}"))
+
+                    if track_digits > 37:
+                        self.message_queue.put((
+                            "warning",
+                            f"Track data has {track_digits} digits (max 37). POS may reject it."
+                        ))
+                    else:
+                        pyautogui.write(payload, interval=cfg["typing_interval"])
+                        if cfg["send_enter"]:
+                            pyautogui.press("enter")
 
                     self.last_uid = uid_hex
                 else:
@@ -182,6 +204,27 @@ class RFIDWorker(threading.Thread):
                 self.last_uid = None
 
 
+def run_console():
+    print("[INFO] Running in console mode. Press Ctrl+C to exit.")
+    message_queue = Queue()
+    worker = RFIDWorker(message_queue)
+    worker.start()
+
+    try:
+        while True:
+            try:
+                level, msg = message_queue.get(timeout=0.5)
+                print(f"[{level.upper()}] {msg}")
+            except Empty:
+                continue
+    except KeyboardInterrupt:
+        print("\n[INFO] Stopping…")
+    finally:
+        worker.stop()
+        worker.join(timeout=2)
+        print("[INFO] Exited.")
+
+
 def create_icon(size=64, color="blue"):
     img = Image.new("RGB", (size, size), "white")
     draw = ImageDraw.Draw(img)
@@ -190,7 +233,7 @@ def create_icon(size=64, color="blue"):
     return img
 
 
-def main():
+def run_tray():
     message_queue = Queue()
     worker = None
 
@@ -260,6 +303,13 @@ def main():
 
     threading.Thread(target=monitor_messages, daemon=True).start()
     icon.run()
+
+
+def main():
+    if "--console" in sys.argv:
+        run_console()
+    else:
+        run_tray()
 
 
 if __name__ == "__main__":

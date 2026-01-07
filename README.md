@@ -15,6 +15,8 @@ ChromisPos is an excellent point of sale software available on sourceforge here:
 p.s. the code was made with the assistance of AI. I couldn't get the first scripts I tried to read data from the cards as I couldn't authenticate the data stored on the cards but could read the UID without authentication. My original idea was to program simple text on the cards. I think now I'll just program the cards with the business name and contact details so if anyone scans if they find the card, they can return it to the outlet and/or add the contact details to their phones.
 
 As it stands as far as Chromis is concerned this could be used as either a loyalty card or gift card but not both since the gift cards uses a different prefix, if anyone can think of a way round that feel free to contribute.
+## A quick note about RFID readers
+The card reader I bought which was inexpensive Trust Ceto contactless reader whilst works perfectly with apps for reading and writing on your phone. According to the AI doesn't support PS/SC commands which is why I can only read the unique ID which is fine for either loyalty or gift card on ChromisPos but my original idea was to write the prefix into the tag, this way I could use NFC cards for both loyalty and gift card use, and possibly for user login too. The AI suggested that I actually needed a reader with readily available documentation to allow both reading and writing using a windows utility/python script - readers such as ACR122U (I've just ordered an ACR122U-A9 so if I can get this to work I'll publish another script specifically for that purpose. The ACR122U are dearer than the Trust Ceto was.
 
 ## 🚀 Installation & Usage (Windows)
 

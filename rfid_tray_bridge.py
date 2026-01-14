@@ -13,7 +13,8 @@ from smartcard.System import readers
 from smartcard.Exceptions import NoCardException
 
 APP_NAME = "RFID POS Bridge"
-pyautogui.FAILSAFE = False  # prevent accidental aborts when mouse hits the corner
+APP_VERSION = "1.1"
+pyautogui.FAILSAFE = False  # prevent accidental aborts
 
 
 def app_dir():
@@ -25,14 +26,14 @@ def app_dir():
 CONFIG_PATH = app_dir() / "rfid_bridge.ini"
 DEFAULT_CONFIG = """\
 # RFID POS Bridge configuration.
-# prefix: digits/letters added before the UID (e.g., merchant ID or magstripe PAN prefix).
-#    Note: Chromis documentation suggests “M1995”, but Chromis only accepts digits;
-#          the default below uses “1995” so the card is recognized.
-# suffix: trailing characters (default '?' for magstripe sentinel). Leave blank if not needed.
-# send_semicolon: set to "yes" to prepend ';' (magstripe Track-2 start). Chromis prefers "no".
-# send_enter: set to "yes" to press Enter after the code. Chromis requires this.
+# prefix: digits/letters added before the UID (magstripe PAN prefix, etc.).
+#   Note: Chromis documentation suggests “M1995”, but Chromis only accepts digits.
+#         The default below uses “1995” so the cards are recognized.
+# suffix: trailing characters (default '?' for magstripe). Leave blank if not needed.
+# send_semicolon: set to "yes" to prepend ';' (Track-2 start). Chromis prefers "no".
+# send_enter: set to "yes" to press Enter after typing. Chromis requires this.
 # typing_interval: delay between keystrokes (seconds). Increase if your POS needs slower typing.
-# chromis_mode: when "yes", overrides the above to match Chromis expectations (no ';', send Enter).
+# chromis_mode: when "yes", overrides the above to match Chromis (no ';', send Enter).
 [POS]
 prefix = 1995
 suffix = ?
@@ -122,6 +123,15 @@ class RFIDWorker(threading.Thread):
         self.last_uid = None
         self.reader = None
 
+    def _get_reader(self):
+        while self.running.is_set():
+            rdrs = readers()
+            if rdrs:
+                return rdrs[0]
+            self.message_queue.put(("warning", "No reader detected—retrying in 5s."))
+            time.sleep(5)
+        return None
+
     def reload_config(self):
         with self.cfg_lock:
             self.config = load_config()
@@ -131,10 +141,10 @@ class RFIDWorker(threading.Thread):
 
     def wait_for_card(self):
         while self.running.is_set():
-            conn = self.reader.createConnection()
+            connection = self.reader.createConnection()
             try:
-                conn.connect()
-                return conn
+                connection.connect()
+                return connection
             except NoCardException:
                 time.sleep(0.2)
         return None
@@ -147,11 +157,9 @@ class RFIDWorker(threading.Thread):
         raise RuntimeError(f"Failed to read UID: {sw1:02X} {sw2:02X}")
 
     def run(self):
-        rdrs = readers()
-        if not rdrs:
-            self.message_queue.put(("error", "No smartcard readers detected."))
+        self.reader = self._get_reader()
+        if not self.reader:
             return
-        self.reader = rdrs[0]
         self.message_queue.put(("info", f"Using reader: {self.reader}"))
 
         while self.running.is_set():
@@ -168,13 +176,13 @@ class RFIDWorker(threading.Thread):
                     with self.cfg_lock:
                         cfg = self.config.copy()
 
-                    pieces = []
+                    segments = []
                     if cfg["send_semicolon"]:
-                        pieces.append(";")
-                    pieces.append(cfg["prefix"])
-                    pieces.append(decimal_uid)
-                    pieces.append(cfg["suffix"])
-                    payload = "".join(pieces)
+                        segments.append(";")
+                    segments.append(cfg["prefix"])
+                    segments.append(decimal_uid)
+                    segments.append(cfg["suffix"])
+                    payload = "".join(segments)
 
                     track_digits = len(cfg["prefix"]) + len(decimal_uid)
                     self.message_queue.put(("info", f"Sending: {payload}"))
@@ -205,7 +213,7 @@ class RFIDWorker(threading.Thread):
 
 
 def run_console():
-    print("[INFO] Running in console mode. Press Ctrl+C to exit.")
+    print(f"[INFO] RFID POS Bridge v{APP_VERSION} (console mode)")
     message_queue = Queue()
     worker = RFIDWorker(message_queue)
     worker.start()
@@ -237,6 +245,10 @@ def run_tray():
     message_queue = Queue()
     worker = None
 
+    def update_title(active=True):
+        state = "active" if active else "stopped"
+        icon.title = f"{APP_NAME} v{APP_VERSION} ({state})"
+
     def start_scanning(icon, item=None):
         nonlocal worker
         if worker and worker.is_alive():
@@ -245,6 +257,7 @@ def run_tray():
         worker = RFIDWorker(message_queue)
         worker.start()
         message_queue.put(("info", "RFID scanning started."))
+        update_title(True)
 
     def stop_scanning(icon, item=None):
         nonlocal worker
@@ -252,6 +265,7 @@ def run_tray():
             worker.stop()
             worker.join(timeout=2)
             message_queue.put(("info", "RFID scanning stopped."))
+            update_title(False)
         else:
             message_queue.put(("info", "RFID scanning already stopped."))
 
@@ -278,6 +292,7 @@ def run_tray():
     icon = pystray.Icon(
         APP_NAME,
         create_icon(),
+        title=f"{APP_NAME} v{APP_VERSION} (starting…)",
         menu=pystray.Menu(
             pystray.MenuItem("Start scanning", start_scanning, default=True),
             pystray.MenuItem("Stop scanning", stop_scanning),

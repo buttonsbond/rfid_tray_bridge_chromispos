@@ -83,7 +83,10 @@ The executable will be in dist/rfid_tray_bridge.exe. Run it from a writable fold
 Use the tray icon → Start with Windows to add/remove the app from your Startup folder. Works for both script and EXE versions.
 
 ## 📜 Changelog
-* v0.2 (latest)
+* v1.1 (latest)
+  * before scanning can begin the utility will wait for the reader to become available
+  * hover over the icon to see current status and version number 
+* v0.2
   * Default prefix is now numeric (1995) because Chromis ignores non-digit characters in Track-2.
   * INI comments updated to document this Chromis behavior for other POS users.
   * Console mode now logs the full payload and warns if the Track data exceeds 37 digits.

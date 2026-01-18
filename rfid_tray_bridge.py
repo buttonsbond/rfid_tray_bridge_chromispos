@@ -15,15 +15,9 @@ from smartcard.System import readers
 from smartcard.Exceptions import NoCardException
 
 APP_NAME = "RFID POS Bridge"
-APP_VERSION = "1.2"
+APP_VERSION = "1.2"  # bumped version to reflect new status indicators
 LOG_ENABLED = False
-LOG_LEVEL_MAP = {
-    "info": logging.INFO,
-    "warning": logging.WARNING,
-    "error": logging.ERROR,
-}
-
-pyautogui.FAILSAFE = False  # prevent accidental aborts when mouse hits the corner
+pyautogui.FAILSAFE = False  # prevent accidental aborts when mouse hits a corner
 
 
 def app_dir():
@@ -37,7 +31,7 @@ DEFAULT_CONFIG = """\
 # RFID POS Bridge configuration.
 # prefix: digits/letters added before the UID (magstripe PAN prefix, etc.).
 #   Note: Chromis documentation suggests “M1995”, but Chromis only accepts digits.
-#         The default below uses “1995” so the cards are recognized.
+#         The default below uses “1995” so cards are recognized.
 # suffix: trailing characters (default '?' for magstripe). Leave blank if not needed.
 # send_semicolon: set to "yes" to prepend ';' (Track-2 start). Chromis prefers "no".
 # send_enter: set to "yes" to press Enter after typing. Chromis requires this.
@@ -103,9 +97,7 @@ def configure_logging(cfg):
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(log_path, encoding="utf-8", mode="a")
-        ],
+        handlers=[logging.FileHandler(log_path, encoding="utf-8", mode="a")],
     )
     LOG_ENABLED = True
     logging.info("Logging enabled. Writing to %s", log_path)
@@ -115,7 +107,15 @@ def output_message(level, msg):
     text = f"[{level.upper()}] {msg}"
     print(text)
     if LOG_ENABLED:
-        logging.log(LOG_LEVEL_MAP.get(level, logging.INFO), msg)
+        logging.log(getattr(logging, level.upper(), logging.INFO), msg)
+
+
+def create_icon(size=64, color="blue"):
+    img = Image.new("RGB", (size, size), "white")
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((8, 8, size - 8, size - 8), fill=color)
+    draw.text((size // 4, size // 3), "RF", fill="white")
+    return img
 
 
 def startup_dir():
@@ -157,9 +157,10 @@ def autostart_installed():
 
 
 class RFIDWorker(threading.Thread):
-    def __init__(self, message_queue, initial_config=None):
+    def __init__(self, message_queue, icon_status_callback, initial_config=None):
         super().__init__(daemon=True)
         self.message_queue = message_queue
+        self.icon_status_callback = icon_status_callback
         self.running = threading.Event()
         self.running.set()
         self.cfg_lock = threading.Lock()
@@ -168,6 +169,7 @@ class RFIDWorker(threading.Thread):
         self.reader = None
         self.startup_delay = self.config.get("startup_delay", 0.0)
         self.nfc_tag_mode = self.config.get("nfc_tag_mode", False)
+        self.card_scanned = False
 
     def reload_config(self):
         with self.cfg_lock:
@@ -179,12 +181,11 @@ class RFIDWorker(threading.Thread):
         self.running.clear()
 
     def _startup_delay(self):
-        delay = self.startup_delay
-        if delay > 0:
-            self.message_queue.put(("info", f"Delaying start by {delay:.1f}s to allow reader initialization."))
+        if self.startup_delay > 0:
+            self.message_queue.put(("info", f"Delaying start by {self.startup_delay:.1f}s (allow reader init)."))
             elapsed = 0.0
             step = 0.5
-            while elapsed < delay and self.running.is_set():
+            while elapsed < self.startup_delay and self.running.is_set():
                 time.sleep(step)
                 elapsed += step
 
@@ -193,6 +194,7 @@ class RFIDWorker(threading.Thread):
             rdrs = readers()
             if rdrs:
                 return rdrs[0]
+            self.icon_status_callback("red")
             self.message_queue.put(("warning", "No reader detected—retrying in 5s."))
             time.sleep(5)
         return None
@@ -224,6 +226,7 @@ class RFIDWorker(threading.Thread):
             self.message_queue.put(("info", "NFC tag mode is enabled (feature under development)."))
 
         self.message_queue.put(("info", f"Using reader: {self.reader}"))
+        self.icon_status_callback("yellow")
 
         while self.running.is_set():
             try:
@@ -233,6 +236,8 @@ class RFIDWorker(threading.Thread):
 
                 uid_hex = self.read_uid(conn)
                 self.message_queue.put(("info", f"Card UID (hex): {uid_hex}"))
+                self.card_scanned = True
+                self.icon_status_callback("green")
 
                 if uid_hex != self.last_uid:
                     decimal_uid = str(int(uid_hex, 16))
@@ -266,6 +271,7 @@ class RFIDWorker(threading.Thread):
 
             except Exception as exc:
                 self.message_queue.put(("error", str(exc)))
+                self.icon_status_callback("red")
             finally:
                 try:
                     conn.disconnect()
@@ -280,8 +286,11 @@ def run_console():
     configure_logging(base_cfg)
     print(f"[INFO] RFID POS Bridge v{APP_VERSION} (console mode)")
 
+    def dummy_icon_callback(color):
+        pass
+
     message_queue = Queue()
-    worker = RFIDWorker(message_queue, initial_config=base_cfg)
+    worker = RFIDWorker(message_queue, dummy_icon_callback, initial_config=base_cfg)
     worker.start()
 
     try:
@@ -299,45 +308,45 @@ def run_console():
         print("[INFO] Exited.")
 
 
-def create_icon(size=64, color="blue"):
-    img = Image.new("RGB", (size, size), "white")
-    draw = ImageDraw.Draw(img)
-    draw.ellipse((8, 8, size - 8, size - 8), fill=color)
-    draw.text((size // 4, size // 3), "RF", fill="white")
-    return img
-
-
 def run_tray():
-    configure_logging(load_config())
+    cfg = load_config()
+    configure_logging(cfg)
     message_queue = Queue()
     worker = None
+    icon = None
+    icons = {
+        "red": create_icon(color="red"),
+        "yellow": create_icon(color="yellow"),
+        "green": create_icon(color="green"),
+    }
 
-    def update_title(active=True):
-        state = "active" if active else "stopped"
-        icon.title = f"{APP_NAME} v{APP_VERSION} ({state})"
+    def set_icon_state(color, active_label):
+        if icon:
+            icon.icon = icons[color]
+            icon.title = f"{APP_NAME} v{APP_VERSION} ({active_label})"
 
-    def start_scanning(icon, item=None):
+    def start_scanning(icon_obj, item=None):
         nonlocal worker
         if worker and worker.is_alive():
             message_queue.put(("info", "RFID scanning already running."))
             return
         cfg = load_config()
-        worker = RFIDWorker(message_queue, initial_config=cfg)
+        worker = RFIDWorker(message_queue, set_icon_state, initial_config=cfg)
         worker.start()
+        set_icon_state("yellow", "active")
         message_queue.put(("info", "RFID scanning started."))
-        update_title(True)
 
-    def stop_scanning(icon, item=None):
+    def stop_scanning(icon_obj, item=None):
         nonlocal worker
         if worker and worker.is_alive():
             worker.stop()
             worker.join(timeout=2)
+            set_icon_state("red", "stopped")
             message_queue.put(("info", "RFID scanning stopped."))
-            update_title(False)
         else:
             message_queue.put(("info", "RFID scanning already stopped."))
 
-    def reload_config(icon, item=None):
+    def reload_config(icon_obj, item=None):
         nonlocal worker
         if worker and worker.is_alive():
             worker.reload_config()
@@ -345,7 +354,7 @@ def run_tray():
             load_config()
         message_queue.put(("info", "Configuration reloaded."))
 
-    def toggle_autostart(icon, item):
+    def toggle_autostart(icon_obj, item):
         if autostart_installed():
             if remove_autostart():
                 message_queue.put(("info", "Autostart removed."))
@@ -353,14 +362,14 @@ def run_tray():
             if install_autostart():
                 message_queue.put(("info", "Autostart installed."))
 
-    def quit_app(icon, item):
-        stop_scanning(icon)
-        icon.stop()
+    def quit_app(icon_obj, item):
+        stop_scanning(icon_obj)
+        icon_obj.stop()
 
     icon = pystray.Icon(
         APP_NAME,
-        create_icon(),
-        title=f"{APP_NAME} v{APP_VERSION} (starting…)",
+        icons["red"],
+        title=f"{APP_NAME} v{APP_VERSION} (stopped)",
         menu=pystray.Menu(
             pystray.MenuItem("Start scanning", start_scanning, default=True),
             pystray.MenuItem("Stop scanning", stop_scanning),
@@ -373,6 +382,10 @@ def run_tray():
             pystray.MenuItem("Exit", quit_app)
         )
     )
+
+    def set_icon_state(color, active_label="unknown"):
+        icon.icon = icons.get(color, icons["red"])
+        icon.title = f"{APP_NAME} v{APP_VERSION} ({active_label})"
 
     start_scanning(icon)
 

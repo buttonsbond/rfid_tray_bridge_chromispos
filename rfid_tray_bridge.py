@@ -12,10 +12,10 @@ import pyautogui
 import pystray
 from PIL import Image, ImageDraw
 from smartcard.System import readers
-from smartcard.Exceptions import NoCardException
+from smartcard.Exceptions import NoCardException, CardConnectionException
 
 APP_NAME = "RFID POS Bridge"
-APP_VERSION = "1.2"
+APP_VERSION = "1.6"  # keep in sync with your latest changes
 pyautogui.FAILSAFE = False
 LOG_ENABLED = False
 
@@ -29,18 +29,18 @@ def app_dir():
 CONFIG_PATH = app_dir() / "rfid_bridge.ini"
 DEFAULT_CONFIG = """\
 # RFID POS Bridge configuration.
-# prefix: digits/letters added before the UID (magstripe PAN prefix, etc.).
+# prefix = digits/letters added before the UID (magstripe PAN prefix, etc.).
 #   Note: Chromis docs mention “M1995”, but Chromis only accepts digits.
-#         Default below uses “1995” so cards are recognized.
-# suffix: trailing characters (default '?' for magstripe). Leave blank if not needed.
-# send_semicolon: set to "yes" to prepend ';' (Track-2 start). Chromis prefers "no".
-# send_enter: set to "yes" to press Enter after typing. Chromis requires this.
-# typing_interval: delay between keystrokes (seconds). Increase if POS needs slower typing.
-# chromis_mode: when "yes", overrides the above to match Chromis (no ';', send Enter).
-# logging_enabled: write a log file for troubleshooting (default: yes).
-# log_file: filename for the log (relative to this script/exe). Default: rfid_bridge.log.
-# startup_delay: seconds to wait before searching for a reader (helps after reboot). Default: 5.0.
-# nfc_tag_mode: reserved for future NFC tag read/write support (default: no).
+#         The default below uses “1995” so cards are recognized.
+# suffix = trailing characters after UID
+# send_semicolon = yes/no (prepend semicolon). Chromis may prefer no semicolon.
+# send_enter = yes/no (press Enter after typing).
+# typing_interval = delay between keystrokes (seconds). Increase if POS needs slower typing.
+# chromis_mode = yes/no (Chromis mode disables semicolon and enforces Enter)
+# logging_enabled = yes/no
+# log_file = log filename
+# startup_delay = seconds to wait for reader after login
+# nfc_tag_mode = yes/no (enable NFC tag mode)
 [POS]
 prefix = 1995
 suffix = ?
@@ -53,7 +53,6 @@ log_file = rfid_bridge.log
 startup_delay = 5.0
 nfc_tag_mode = no
 """
-# ------------------------------------------------------------------
 
 
 def ensure_config():
@@ -69,7 +68,7 @@ def load_config():
     config = configparser.ConfigParser()
     config.read(CONFIG_PATH, encoding="utf-8")
     section = config["POS"]
-    result = {
+    vals = {
         "prefix": section.get("prefix", ""),
         "suffix": section.get("suffix", ""),
         "send_semicolon": section.getboolean("send_semicolon", False),
@@ -81,10 +80,10 @@ def load_config():
         "startup_delay": section.getfloat("startup_delay", 5.0),
         "nfc_tag_mode": section.getboolean("nfc_tag_mode", False),
     }
-    if result["chromis_mode"]:
-        result["send_semicolon"] = False
-        result["send_enter"] = True
-    return result
+    if vals["chromis_mode"]:
+        vals["send_semicolon"] = False
+        vals["send_enter"] = True
+    return vals
 
 
 def configure_logging(cfg):
@@ -101,19 +100,10 @@ def configure_logging(cfg):
     logging.info("Logging enabled. Writing to %s", log_path)
 
 
-def output_message(level, msg):
-    text = f"[{level.upper()}] {msg}"
-    print(text)
+def log_message(level, message):
+    print(f"[{level.upper()}] {message}")
     if LOG_ENABLED:
-        logging.log(getattr(logging, level.upper(), logging.INFO), msg)
-
-
-def create_icon(size=64, color="blue"):
-    img = Image.new("RGB", (size, size), "white")
-    draw = ImageDraw.Draw(img)
-    draw.ellipse((8, 8, size - 8, size - 8), fill=color)
-    draw.text((size // 4, size // 3), "RF", fill="white")
-    return img
+        logging.log(getattr(logging, level.upper(), logging.INFO), message)
 
 
 def startup_dir():
@@ -132,7 +122,7 @@ def launch_command():
     script = Path(__file__).resolve()
     if pythonw.exists():
         return f'"{pythonw}" "{script}"'
-    return f'"{python_exe}" "{script}"'
+    return f'"{python_executable}" "{script}"'
 
 
 def install_autostart():
@@ -155,42 +145,39 @@ def autostart_installed():
 
 
 class RFIDWorker(threading.Thread):
-    def __init__(self, message_queue, initial_config=None):
+    def __init__(self, queue, config, initial_config=None):
         super().__init__(daemon=True)
-        self.message_queue = message_queue
+        self.queue = queue
         self.running = threading.Event()
         self.running.set()
-        self.cfg_lock = threading.Lock()
-        self.config = initial_config or load_config()
-        self.last_uid = None
+        self.config = initial_config or config
+        self.cfg = config
         self.reader = None
-        self.startup_delay = self.config.get("startup_delay", 0.0)
-        self.card_seen = False
-
-    def reload_config(self):
-        with self.cfg_lock:
-            self.config = load_config()
-            self.startup_delay = self.config.get("startup_delay", 0.0)
+        self.last_uid = None
+        self.current_status = None
 
     def stop(self):
         self.running.clear()
 
-    def _startup_delay(self):
-        if self.startup_delay > 0:
-            self.message_queue.put(("info", f"Delaying start by {self.startup_delay:.1f}s"))
-            t = 0.0
-            step = 0.5
-            while t < self.startup_delay and self.running.is_set():
-                time.sleep(step)
-                t += step
+    def set_status(self, status, log_text=None):
+        if status != self.current_status:
+            self.current_status = status
+            self.queue.put(("status", status))
+        if log_text:
+            self.queue.put(("log", "info", log_text))
 
-    def _get_reader(self):
+    def wait_for_reader(self):
+        delay = self.config.get("startup_delay", 0.0)
+        if delay > 0:
+            self.set_status("waiting", f"[STATUS] waiting {delay:.1f}s before searching for reader…")
+            time.sleep(delay)
+
         while self.running.is_set():
             rdrs = readers()
             if rdrs:
+                self.set_status("scanning", "[STATUS] reader detected.")
                 return rdrs[0]
-            self.message_queue.put(("status", "red"))
-            self.message_queue.put(("warning", "No reader detected—retrying in 5s."))
+            self.set_status("waiting", "[STATUS] no reader yet—retrying in 5s.")
             time.sleep(5)
         return None
 
@@ -212,13 +199,12 @@ class RFIDWorker(threading.Thread):
         raise RuntimeError(f"Failed to read UID: {sw1:02X} {sw2:02X}")
 
     def run(self):
-        self._startup_delay()
-        self.reader = self._get_reader()
+        self.reader = self.wait_for_reader()
         if not self.reader:
             return
 
-        self.message_queue.put(("info", f"Using reader: {self.reader}"))
-        self.message_queue.put(("status", "yellow"))
+        self.queue.put(("log", "info", f"[STATUS] using reader: {self.reader}"))
+        self.set_status("scanning")
 
         while self.running.is_set():
             try:
@@ -227,46 +213,41 @@ class RFIDWorker(threading.Thread):
                     break
 
                 uid_hex = self.read_uid(conn)
-                self.message_queue.put(("info", f"Card UID (hex): {uid_hex}"))
-                self.card_seen = True
-                self.message_queue.put(("status", "green"))
+                self.queue.put(("log", "info", f"Card UID (hex): {uid_hex}"))
+                self.set_status("card")
 
                 if uid_hex != self.last_uid:
                     decimal_uid = str(int(uid_hex, 16))
-                    with self.cfg_lock:
-                        cfg = self.config.copy()
+                    payload = ""
+                    if self.config["send_semicolon"]:
+                        payload += ";"
+                    payload += self.config["prefix"] + decimal_uid + self.config["suffix"]
 
-                    pieces = []
-                    if cfg["send_semicolon"]:
-                        pieces.append(";")
-                    pieces.append(cfg["prefix"])
-                    pieces.append(decimal_uid)
-                    pieces.append(cfg["suffix"])
-                    payload = "".join(pieces)
-
-                    track_digits = len(cfg["prefix"]) + len(decimal_uid)
-                    self.message_queue.put(("info", f"Sending: {payload}"))
+                    track_digits = len(self.config["prefix"]) + len(decimal_uid)
+                    self.queue.put(("log", "info", f"Sending: {payload}"))
 
                     if track_digits > 37:
-                        self.message_queue.put(("warning", f"Track data has {track_digits} digits (max 37)."))
+                        self.queue.put(("log", "warning", f"Track data has {track_digits} digits (max 37)."))
                     else:
-                        pyautogui.write(payload, interval=cfg["typing_interval"])
-                        if cfg["send_enter"]:
+                        pyautogui.write(payload, interval=self.config["typing_interval"])
+                        if self.config["send_enter"]:
                             pyautogui.press("enter")
 
                     self.last_uid = uid_hex
                 else:
-                    self.message_queue.put(("info", "Duplicate UID – skipped."))
+                    self.queue.put(("log", "info", "Duplicate UID – skipped."))
+
+                self.set_status("scanning")
 
             except Exception as exc:
-                self.message_queue.put(("error", str(exc)))
-                self.message_queue.put(("status", "red"))
+                self.queue.put(("log", "error", str(exc)))
+                self.set_status("waiting")
             finally:
                 try:
                     conn.disconnect()
                 except Exception:
                     pass
-                time.sleep(0.6)
+                time.sleep(0.5)
                 self.last_uid = None
 
 
@@ -274,113 +255,140 @@ def run_console():
     cfg = load_config()
     configure_logging(cfg)
     print(f"[INFO] RFID POS Bridge v{APP_VERSION} (console mode)")
-    message_queue = Queue()
-    worker = RFIDWorker(message_queue, initial_config=cfg)
+
+    queue = Queue()
+    worker = RFIDWorker(queue, cfg)
     worker.start()
 
     try:
+        # Allow Ctrl+C to exit gracefully
         while True:
             try:
-                level, msg = message_queue.get(timeout=0.5)
-                output_message(level, msg)
+                msg = queue.get(timeout=0.5)
+                if isinstance(msg, tuple) and len(msg) >= 2:
+                    if msg[0] == "log":
+                        _, level, text = msg
+                        log_message(level, text)
+                    elif msg[0] == "status":
+                        # msg = ("status", "color")
+                        log_message("info", f"[STATUS] {msg[1]}")
+                    else:
+                        log_message("info", str(msg))
+                else:
+                    log_message("info", str(msg))
             except Empty:
                 continue
-    except KeyboardInterrupt:
-        print("\n[INFO] Stopping…")
+            except KeyboardInterrupt:
+                print("\n[INFO] Console interrupt received. Stopping...")
+                break
     finally:
         worker.stop()
-        worker.join(timeout=2)
-        print("[INFO] Exited.")
+        worker.join()
+
+
+def create_icon(color):
+    img = Image.new("RGB", (64, 64), "white")
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((8, 8, 56, 56), fill=color)
+    draw.text((20, 20), "RF", fill="white")
+    return img
 
 
 def run_tray():
     cfg = load_config()
     configure_logging(cfg)
-    message_queue = Queue()
-    worker = None
+
     icons = {
-        "red": create_icon(color="red"),
-        "yellow": create_icon(color="yellow"),
-        "green": create_icon(color="green"),
+        "red": create_icon("red"),
+        "yellow": create_icon("yellow"),
+        "green": create_icon("green"),
     }
-    icon = pystray.Icon(
-        APP_NAME,
-        icons["red"],
-        title=f"{APP_NAME} v{APP_VERSION} (stopped)"
-    )
 
-    def set_icon(color, label):
-        icon.icon = icons.get(color, icons["red"])
-        icon.title = f"{APP_NAME} v{APP_VERSION} ({label})"
+    icon = pystray.Icon(APP_NAME, icons["red"], f"{APP_NAME} v{APP_VERSION} (idle)")
+    queue = Queue()
+    worker = None
 
-    def start_scanning(_icon, _item=None):
+    states = {
+        "waiting": "waiting for reader",
+        "scanning": "active",
+        "card": "card scanned",
+    }
+
+    def set_state(status):
+        color = {"waiting":"red","scanning":"yellow","card":"green"}.get(status,"red")
+        icon.icon = icons[color]
+        icon.title = f"{APP_NAME} v{APP_VERSION} ({states.get(status,'idle')})"
+
+    def start_worker(_icon=None, _item=None):
         nonlocal worker
         if worker and worker.is_alive():
-            message_queue.put(("info", "RFID scanning already running."))
+            queue.put(("log", "info", "RFID scanning already running."))
             return
-        cfg = load_config()
-        worker = RFIDWorker(message_queue, initial_config=cfg)
+        new_cfg = load_config()
+        worker = RFIDWorker(queue, new_cfg)
         worker.start()
-        message_queue.put(("info", "RFID scanning started."))
-        set_icon("yellow", "active")
+        queue.put(("log", "info", "RFID scanning started."))
+        set_state("waiting")
 
-    def stop_scanning(_icon, _item=None):
+    def stop_worker(_icon=None, _item=None):
         nonlocal worker
         if worker and worker.is_alive():
             worker.stop()
             worker.join(timeout=2)
-            message_queue.put(("info", "RFID scanning stopped."))
+            queue.put(("log", "info", "RFID scanning stopped."))
         else:
-            message_queue.put(("info", "RFID scanning already stopped."))
-        set_icon("red", "stopped")
+            queue.put(("log", "info", "RFID scanning already stopped."))
+        set_state("waiting")
 
-    def reload_config(_icon, _item=None):
-        nonlocal worker
+    def reload_config(_icon=None, _item=None):
         if worker and worker.is_alive():
             worker.reload_config()
-        else:
-            load_config()
-        message_queue.put(("info", "Configuration reloaded."))
+        queue.put(("log", "info", "Configuration reloaded."))
 
-    def toggle_autostart(_icon, _item):
+    def toggle_startup(_icon=None, _item=None):
         if autostart_installed():
-            if remove_autostart():
-                message_queue.put(("info", "Autostart removed."))
+            remove_autostart()
+            queue.put(("log", "info", "Autostart removed."))
         else:
-            if install_autostart():
-                message_queue.put(("info", "Autostart installed."))
+            install_autostart()
+            queue.put(("log", "info", "Autostart installed."))
 
-    def quit_app(_icon, _item):
-        stop_scanning(_icon)
+    def quit_app(_icon=None, _item=None):
+        stop_worker()
         icon.stop()
 
     icon.menu = pystray.Menu(
-        pystray.MenuItem("Start scanning", start_scanning, default=True),
-        pystray.MenuItem("Stop scanning", stop_scanning),
+        pystray.MenuItem("Start scanning", start_worker, default=True),
+        pystray.MenuItem("Stop scanning", stop_worker),
         pystray.MenuItem("Reload config", reload_config),
-        pystray.MenuItem("Start with Windows", toggle_autostart,
-                         checked=lambda item: autostart_installed()),
+        pystray.MenuItem(
+            "Start with Windows",
+            toggle_startup,
+            checked=lambda item: autostart_installed()
+        ),
         pystray.MenuItem("Exit", quit_app)
     )
 
-    start_scanning(icon)
+    start_worker()
 
-    def monitor_messages():
-        color_map = {"status": {"red": ("red", "idle"),
-                                "yellow": ("yellow", "active"),
-                                "green": ("green", "active")}}
+    def pump_queue():
         while icon.visible:
             try:
-                level, msg = message_queue.get(timeout=0.5)
-                if level == "status":
-                    color_info = color_map["status"].get(msg, ("red", "unknown"))
-                    set_icon(*color_info)
+                msg = queue.get(timeout=0.5)
+                if isinstance(msg, tuple) and len(msg) >= 1:
+                    if msg[0] == "log":
+                        _, level, text = msg
+                        log_message(level, text)
+                    elif msg[0] == "status":
+                        set_state(msg[1])
+                    else:
+                        log_message("info", str(msg))
                 else:
-                    output_message(level, msg)
+                    log_message("info", str(msg))
             except Empty:
                 continue
 
-    threading.Thread(target=monitor_messages, daemon=True).start()
+    threading.Thread(target=pump_queue, daemon=True).start()
     icon.run()
 
 

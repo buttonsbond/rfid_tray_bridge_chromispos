@@ -1,4 +1,6 @@
+#!/usr/bin/env python3
 import configparser
+import logging
 import os
 import sys
 import threading
@@ -13,8 +15,15 @@ from smartcard.System import readers
 from smartcard.Exceptions import NoCardException
 
 APP_NAME = "RFID POS Bridge"
-APP_VERSION = "1.1"
-pyautogui.FAILSAFE = False  # prevent accidental aborts
+APP_VERSION = "1.2"
+LOG_ENABLED = False
+LOG_LEVEL_MAP = {
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+}
+
+pyautogui.FAILSAFE = False  # prevent accidental aborts when mouse hits the corner
 
 
 def app_dir():
@@ -34,6 +43,10 @@ DEFAULT_CONFIG = """\
 # send_enter: set to "yes" to press Enter after typing. Chromis requires this.
 # typing_interval: delay between keystrokes (seconds). Increase if your POS needs slower typing.
 # chromis_mode: when "yes", overrides the above to match Chromis (no ';', send Enter).
+# logging_enabled: write a log file for troubleshooting (default: yes).
+# log_file: filename for the log (relative to this script/exe). Default: rfid_bridge.log.
+# startup_delay: seconds to wait before searching for a reader (helps after reboot). Default: 5.0.
+# nfc_tag_mode: reserved for future NFC tag read/write support (default: no).
 [POS]
 prefix = 1995
 suffix = ?
@@ -41,6 +54,10 @@ send_semicolon = no
 send_enter = yes
 typing_interval = 0.01
 chromis_mode = yes
+logging_enabled = yes
+log_file = rfid_bridge.log
+startup_delay = 5.0
+nfc_tag_mode = no
 """
 
 
@@ -65,6 +82,10 @@ def load_config():
         "send_enter": section.getboolean("send_enter", True),
         "typing_interval": section.getfloat("typing_interval", 0.01),
         "chromis_mode": section.getboolean("chromis_mode", True),
+        "logging_enabled": section.getboolean("logging_enabled", True),
+        "log_file": section.get("log_file", "rfid_bridge.log"),
+        "startup_delay": section.getfloat("startup_delay", 5.0),
+        "nfc_tag_mode": section.getboolean("nfc_tag_mode", False),
     }
 
     if result["chromis_mode"]:
@@ -72,6 +93,29 @@ def load_config():
         result["send_enter"] = True
 
     return result
+
+
+def configure_logging(cfg):
+    global LOG_ENABLED
+    if not cfg.get("logging_enabled", False) or LOG_ENABLED:
+        return
+    log_path = app_dir() / cfg.get("log_file", "rfid_bridge.log")
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_path, encoding="utf-8", mode="a")
+        ],
+    )
+    LOG_ENABLED = True
+    logging.info("Logging enabled. Writing to %s", log_path)
+
+
+def output_message(level, msg):
+    text = f"[{level.upper()}] {msg}"
+    print(text)
+    if LOG_ENABLED:
+        logging.log(LOG_LEVEL_MAP.get(level, logging.INFO), msg)
 
 
 def startup_dir():
@@ -113,15 +157,36 @@ def autostart_installed():
 
 
 class RFIDWorker(threading.Thread):
-    def __init__(self, message_queue):
+    def __init__(self, message_queue, initial_config=None):
         super().__init__(daemon=True)
         self.message_queue = message_queue
         self.running = threading.Event()
         self.running.set()
         self.cfg_lock = threading.Lock()
-        self.config = load_config()
+        self.config = initial_config or load_config()
         self.last_uid = None
         self.reader = None
+        self.startup_delay = self.config.get("startup_delay", 0.0)
+        self.nfc_tag_mode = self.config.get("nfc_tag_mode", False)
+
+    def reload_config(self):
+        with self.cfg_lock:
+            self.config = load_config()
+            self.startup_delay = self.config.get("startup_delay", 0.0)
+            self.nfc_tag_mode = self.config.get("nfc_tag_mode", False)
+
+    def stop(self):
+        self.running.clear()
+
+    def _startup_delay(self):
+        delay = self.startup_delay
+        if delay > 0:
+            self.message_queue.put(("info", f"Delaying start by {delay:.1f}s to allow reader initialization."))
+            elapsed = 0.0
+            step = 0.5
+            while elapsed < delay and self.running.is_set():
+                time.sleep(step)
+                elapsed += step
 
     def _get_reader(self):
         while self.running.is_set():
@@ -131,13 +196,6 @@ class RFIDWorker(threading.Thread):
             self.message_queue.put(("warning", "No reader detected—retrying in 5s."))
             time.sleep(5)
         return None
-
-    def reload_config(self):
-        with self.cfg_lock:
-            self.config = load_config()
-
-    def stop(self):
-        self.running.clear()
 
     def wait_for_card(self):
         while self.running.is_set():
@@ -157,9 +215,14 @@ class RFIDWorker(threading.Thread):
         raise RuntimeError(f"Failed to read UID: {sw1:02X} {sw2:02X}")
 
     def run(self):
+        self._startup_delay()
         self.reader = self._get_reader()
         if not self.reader:
             return
+
+        if self.nfc_tag_mode:
+            self.message_queue.put(("info", "NFC tag mode is enabled (feature under development)."))
+
         self.message_queue.put(("info", f"Using reader: {self.reader}"))
 
         while self.running.is_set():
@@ -213,16 +276,19 @@ class RFIDWorker(threading.Thread):
 
 
 def run_console():
+    base_cfg = load_config()
+    configure_logging(base_cfg)
     print(f"[INFO] RFID POS Bridge v{APP_VERSION} (console mode)")
+
     message_queue = Queue()
-    worker = RFIDWorker(message_queue)
+    worker = RFIDWorker(message_queue, initial_config=base_cfg)
     worker.start()
 
     try:
         while True:
             try:
                 level, msg = message_queue.get(timeout=0.5)
-                print(f"[{level.upper()}] {msg}")
+                output_message(level, msg)
             except Empty:
                 continue
     except KeyboardInterrupt:
@@ -242,6 +308,7 @@ def create_icon(size=64, color="blue"):
 
 
 def run_tray():
+    configure_logging(load_config())
     message_queue = Queue()
     worker = None
 
@@ -254,7 +321,8 @@ def run_tray():
         if worker and worker.is_alive():
             message_queue.put(("info", "RFID scanning already running."))
             return
-        worker = RFIDWorker(message_queue)
+        cfg = load_config()
+        worker = RFIDWorker(message_queue, initial_config=cfg)
         worker.start()
         message_queue.put(("info", "RFID scanning started."))
         update_title(True)
@@ -312,7 +380,7 @@ def run_tray():
         while icon.visible:
             try:
                 level, msg = message_queue.get(timeout=0.5)
-                print(f"[{level.upper()}] {msg}")
+                output_message(level, msg)
             except Empty:
                 continue
 

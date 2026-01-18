@@ -83,11 +83,13 @@ The executable will be in dist/rfid_tray_bridge.exe. Run it from a writable fold
 Use the tray icon → Start with Windows to add/remove the app from your Startup folder. Works for both script and EXE versions.
 
 ## 📜 Changelog
+* v1.6 (latest)
+  * the tray icons colour still not working
 * v1.2c (latest)
   * 1.1 wasn't quite working as expected with regard for waiting for reader
   * added option to log output as well as --console on the command line
   * updated ini ready for future enhancement with nfc tag reading (new reader arriving any day) so hopefully the utility will be able to work with PS/PC readers as well as the dumb one I'm using now
-  * tray icons - red - not scanning/no scanner detected. yellow - scanning, waiting for first card. green - scanning, first card was read
+  * tray icons - red - not scanning/no scanner detected. yellow - scanning, waiting for first card. green - scanning, first card was read (sorry wasn't working properly)
 * v1.1
   * before scanning can begin the utility will wait for the reader to become available
   * hover over the icon to see current status and version number 

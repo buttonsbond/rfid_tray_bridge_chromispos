@@ -18,6 +18,8 @@ As it stands as far as Chromis is concerned this could be used as either a loyal
 ## A quick note about RFID readers
 The card reader I bought which was inexpensive Trust Ceto contactless reader whilst works perfectly with apps for reading and writing on your phone. According to the AI doesn't support PS/SC commands which is why I can only read the unique ID which is fine for either loyalty or gift card on ChromisPos but my original idea was to write the prefix into the tag, this way I could use NFC cards for both loyalty and gift card use, and possibly for user login too. The AI suggested that I actually needed a reader with readily available documentation to allow both reading and writing using a windows utility/python script - readers such as ACR122U (I've just ordered an ACR122U-A9 so if I can get this to work I'll publish another script specifically for that purpose. The ACR122U are dearer than the Trust Ceto was.
 
+This utility also works with acr122u readers. The ACR122U does support PS/SC - I'll be writing a new utility specifically for that with a view to reading stored text records - for ChromisPos specifically a text record such as '1995' or '1998' so if present I can then use the UID along with that to distinguish between a chromispos loyalty or gift card. Will also look at storing an additional text record with possibly the customers name, and also information about the business - if scanned can be returned to the bar.
+
 ## 🚀 Installation & Usage (Windows)
 
 ### ✅ Prerequisites

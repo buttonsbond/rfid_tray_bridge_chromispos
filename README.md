@@ -83,9 +83,12 @@ The executable will be in dist/rfid_tray_bridge.exe. Run it from a writable fold
 Use the tray icon → Start with Windows to add/remove the app from your Startup folder. Works for both script and EXE versions.
 
 ## 📜 Changelog
-* v1.6 (latest)
+* v1.6
   * the tray icons colour still not working
-* v1.2c (latest)
+  * removed start with windows - wasn't working correctly - just add it to your startup folder on windows!
+  * will not be implementing nfc tag reading for this utility - it will purely just be the UID, I'll write
+  * another prog to do that.
+* v1.2c
   * 1.1 wasn't quite working as expected with regard for waiting for reader
   * added option to log output as well as --console on the command line
   * updated ini ready for future enhancement with nfc tag reading (new reader arriving any day) so hopefully the utility will be able to work with PS/PC readers as well as the dumb one I'm using now

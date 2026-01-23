@@ -7,7 +7,6 @@ import threading
 import time
 from pathlib import Path
 from queue import Queue, Empty
-
 import pyautogui
 import pystray
 from PIL import Image, ImageDraw
@@ -34,6 +33,7 @@ prefix = 1995
 suffix = ?
 send_semicolon = no
 send_enter = yes
+send_suffix = no
 typing_interval = 0.01
 chromis_mode = yes
 logging_enabled = yes
@@ -59,6 +59,7 @@ def load_config():
         "suffix": section.get("suffix", ""),
         "send_semicolon": section.getboolean("send_semicolon", False),
         "send_enter": section.getboolean("send_enter", True),
+        "send_suffix": section.getboolean("send_suffix", False),
         "typing_interval": section.getfloat("typing_interval", 0.01),
         "chromis_mode": section.getboolean("chromis_mode", True),
         "logging_enabled": section.getboolean("logging_enabled", True),
@@ -108,12 +109,10 @@ def run_console():
     cfg = load_config()
     configure_logging(cfg)
     print(f"[INFO] RFID POS Bridge v{APP_VERSION} (console mode)")
-
     queue = Queue()
     # A minimal worker for console mode: wait for reader/card, then log status
     worker = RFIDWorker(queue, cfg)
     worker.start()
-
     try:
         while True:
             try:
@@ -139,7 +138,6 @@ def run_console():
 def run_tray():
     cfg = load_config()
     configure_logging(cfg)
-
     # colors
     icon_red = create_icon("red")
     icon_yellow = create_icon("yellow")
@@ -149,7 +147,6 @@ def run_tray():
         "yellow": icon_yellow,
         "green": icon_green,
     }
-
     icon = pystray.Icon(APP_NAME, icons["red"], f"{APP_NAME} v{APP_VERSION} (idle)")
     queue = Queue()
     worker = None
@@ -185,7 +182,6 @@ def run_tray():
         pystray.MenuItem("Stop scanning", stop_worker),
         pystray.MenuItem("Exit", lambda: (stop_worker(), icon.stop()))
     )
-
     start_worker()
 
     def pump_queue():
@@ -260,7 +256,6 @@ class RFIDWorker(threading.Thread):
             return
         self.queue.put(("log", "info", f"[STATUS] using reader: {self.reader}"))
         self.queue.put(("status", "yellow"))
-
         while self.running.is_set():
             try:
                 conn = self.wait_for_card()
@@ -270,21 +265,29 @@ class RFIDWorker(threading.Thread):
                 self.queue.put(("log", "info", f"Card UID (hex): {uid}"))
                 if uid != self.last_uid:
                     decimal_uid = str(int(uid, 16))
-                    payload = self.config["prefix"] + decimal_uid + self.config["suffix"]
-                    track_digits = len(self.config["prefix"]) + len(decimal_uid)
-                    self.queue.put(("log", "info", f"Sending: {payload}"))
 
+                    # --- minimal change: respect send_suffix config ---
+                    prefix = self.config.get("prefix", "")
+                    suffix = self.config.get("suffix", "")
+                    if not self.config.get("send_suffix", False):
+                        suffix_to_send = ""
+                    else:
+                        suffix_to_send = suffix
+
+                    payload = prefix + decimal_uid + suffix_to_send
+                    track_digits = len(prefix) + len(decimal_uid)
+                    # --- end minimal change ---
+
+                    self.queue.put(("log", "info", f"Sending: {payload}"))
                     if track_digits > 37:
                         self.queue.put(("log", "warning", f"Track data has {track_digits} digits (max 37)."))
                     else:
                         pyautogui.write(";" + payload if False else payload, interval=self.config["typing_interval"])
                         if self.config["send_enter"]:
                             pyautogui.press("enter")
-
                     self.last_uid = uid
                 else:
                     self.queue.put(("log", "info", "Duplicate UID – skipped."))
-
             except Exception as exc:
                 self.queue.put(("log", "error", str(exc)))
             finally:

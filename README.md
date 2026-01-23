@@ -85,6 +85,8 @@ The executable will be in dist/rfid_tray_bridge.exe. Run it from a writable fold
 Use the tray icon → Start with Windows to add/remove the app from your Startup folder. Works for both script and EXE versions.
 
 ## 📜 Changelog
+* v1.6-230126
+  * Seemingly for Chromis I don't need the sentinels, only applicable to magnetic stripe readers so have amended so we can skip sending them. I've left the functionality in just in case there is a use case for anyone else.
 * v1.6
   * the tray icons colour still not working
   * removed start with windows - wasn't working correctly - just add it to your startup folder on windows!
